@@ -1,0 +1,4 @@
+---
+# handlers file for cis_macos
+- name: Restart Finder
+  ansible.builtin.command: /usr/bin/killall Finder

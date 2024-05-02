@@ -1,0 +1,18 @@
+- name: Harden Mac OS
+  hosts: localhost
+  connection: local
+  # become: true
+  # become_user: root
+  gather_facts: true
+
+  tasks:
+    # - name: Show facts
+    #   ansible.builtin.debug:
+    #     var: ansible_facts.platform
+
+    - name: Populate service facts
+      ansible.builtin.service_facts:
+
+    - name: Print service facts
+      ansible.builtin.debug:
+        var: ansible_facts.services

@@ -1,0 +1,785 @@
+# Gather the list of users
+- name: Gather the list of users
+  ansible.builtin.command: dscl . list /Users UniqueID | awk '$2 >= 500 {print $1}'
+  register: users_output
+  changed_when: false
+
+- name: Set the users fact
+  ansible.builtin.set_fact:
+    users: '{{ users_output.stdout_lines }}'
+
+- name: 1.1 Audit - Check if Apple-provided software is current
+  ansible.builtin.command: /usr/sbin/softwareupdate -l
+  register: audit_result
+  changed_when: false
+
+- name: 1.1 Remediation - Install available updates
+  ansible.builtin.command: /usr/sbin/softwareupdate -i -a
+  when: '''No new software available.'' not in audit_result.stderr'
+  register: remediation_result
+  changed_when: '''No updates are available.'' not in remediation_result.stderr'
+
+- name: 1.2 Ensure Auto Update Is Enabled
+  community.general.osx_defaults:
+    domain: /Library/Preferences/com.apple.SoftwareUpdate
+    key: AutomaticCheckEnabled
+    type: bool
+    value: true
+
+- name: 1.3 Ensure Download New Updates When Available Is Enabled
+  community.general.osx_defaults:
+    domain: /Library/Preferences/com.apple.SoftwareUpdate
+    key: AutomaticDownload
+    type: bool
+    value: true
+
+- name: 1.4 Ensure Install of macOS Updates Is Enabled
+  community.general.osx_defaults:
+    domain: /Library/Preferences/com.apple.SoftwareUpdate
+    key: AutomaticallyInstallMacOSUpdates
+    type: bool
+    value: true
+
+- name: 1.5 Ensure Install Application Updates from the App Store Is Enabled
+  community.general.osx_defaults:
+    domain: /Library/Preferences/com.apple.commerce
+    key: AutoUpdate
+    type: bool
+    value: true
+
+- name: 1.6 Ensure Install Security Responses and System Files Is Enabled (part 1)
+  community.general.osx_defaults:
+    domain: /Library/Preferences/com.apple.SoftwareUpdate
+    key: ConfigDataInstall
+    type: bool
+    value: true
+
+- name: 1.6 Ensure Install Security Responses and System Files Is Enabled (part 2)
+  community.general.osx_defaults:
+    domain: /Library/Preferences/com.apple.SoftwareUpdate
+    key: CriticalUpdateInstall
+    type: bool
+    value: true
+
+# Recommendation 2.2.1
+- name: 2.2.1 Audit - Check if Firewall Is Enabled
+  ansible.builtin.command: /usr/bin/defaults read /Library/Preferences/com.apple.alf globalstate
+  register: firewall_audit_result
+  failed_when: firewall_audit_result.rc > 1
+  changed_when: false
+
+- name: 2.2.1 Remediation - Enable Firewall
+  ansible.builtin.command: /usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate on
+  when: firewall_audit_result.stdout not in ['1', '2']
+  register: firewall_remediation_result
+  changed_when: firewall_remediation_result.rc == 0
+
+# Recommendation 2.2.2
+- name: 2.2.2 Audit - Check if Firewall Stealth Mode Is Enabled
+  ansible.builtin.command: /usr/libexec/ApplicationFirewall/socketfilterfw --getstealthmode
+  register: firewall_stealth_audit_result
+  changed_when: false
+
+- name: 2.2.2 Remediation - Enable Firewall Stealth Mode
+  ansible.builtin.command: /usr/libexec/ApplicationFirewall/socketfilterfw --setstealthmode on
+  when: '"Stealth mode enabled" not in firewall_stealth_audit_result.stdout'
+  register: firewall_stealth_remediation_result
+  changed_when: firewall_stealth_remediation_result.rc == 0
+
+# Recommendation 2.3.3.1
+- name: 2.3.3.1 Audit - Get list of loaded services
+  ansible.builtin.command: launchctl list
+  register: launchctl_list_result
+  changed_when: false
+
+- name: 2.3.3.1 Audit - Check if DVD or CD Sharing Is Disabled
+  ansible.builtin.command: grep -c com.apple.ODSAgent
+  args:
+    stdin: '{{ launchctl_list_result.stdout }}'
+  register: dvd_cd_sharing_audit_result
+  failed_when: dvd_cd_sharing_audit_result.rc > 1
+  changed_when: false
+
+- name: 2.3.3.1 Remediation - Disable DVD or CD Sharing
+  ansible.builtin.command: launchctl disable system/com.apple.ODSAgent
+  when: dvd_cd_sharing_audit_result.stdout != "0"
+  register: dvd_cd_sharing_remediation_result
+  changed_when: dvd_cd_sharing_remediation_result.rc == 0
+
+# Recommendation 2.3.3.2
+- name: 2.3.3.2 Audit - Get list of loaded services
+  ansible.builtin.command: launchctl list
+  register: launchctl_list_result
+  changed_when: false
+
+- name: 2.3.3.2 Audit - Check if Screen Sharing Is Disabled
+  ansible.builtin.command: grep -c com.apple.screensharing
+  args:
+    stdin: '{{ launchctl_list_result.stdout }}'
+  register: screen_sharing_audit_result
+  failed_when: screen_sharing_audit_result.rc > 1
+  changed_when: false
+
+- name: 2.3.3.2 Remediation - Disable Screen Sharing
+  ansible.builtin.command: launchctl disable system/com.apple.screensharing
+  when: screen_sharing_audit_result.stdout != "0"
+  register: screen_sharing_remediation_result
+  changed_when: screen_sharing_remediation_result.rc == 0
+
+# Recommendation 2.3.3.3
+- name: 2.3.3.3 Audit - Get list of loaded services
+  ansible.builtin.command: launchctl list
+  register: launchctl_list_result
+  changed_when: false
+
+- name: 2.3.3.3 Audit - Check if File Sharing Is Disabled
+  ansible.builtin.command: grep -c "com.apple.smbd"
+  args:
+    stdin: '{{ launchctl_list_result.stdout }}'
+  register: file_sharing_audit_result
+  failed_when: file_sharing_audit_result.rc > 1
+  changed_when: false
+
+- name: 2.3.3.3 Remediation - Disable File Sharing
+  ansible.builtin.command: launchctl disable system/com.apple.smbd
+  when: file_sharing_audit_result.stdout != "0"
+  register: file_sharing_remediation_result
+  changed_when: file_sharing_remediation_result.rc == 0
+
+# Recommendation 2.3.3.4
+- name: 2.3.3.4 Audit - Check if Printer Sharing Is Disabled
+  ansible.builtin.command: cupsctl
+  register: cupsctl_result
+  changed_when: false
+
+- name: 2.3.3.4 Audit - Check if Printer Sharing Is Disabled
+  ansible.builtin.command: grep -c "_share_printers=0"
+  args:
+    stdin: '{{ cupsctl_result.stdout }}'
+  register: printer_sharing_audit_result
+  failed_when: printer_sharing_audit_result.rc > 1
+  changed_when: false
+
+- name: 2.3.3.4 Remediation - Disable Printer Sharing
+  ansible.builtin.command: cupsctl --no-share-printers
+  when: printer_sharing_audit_result.stdout != "1"
+  register: printer_sharing_remediation_result
+  changed_when: printer_sharing_remediation_result.rc == 0
+
+# Recommendation 2.3.3.6
+- name: 2.3.3.6 Audit - Check if Remote Management Is Disabled
+  ansible.builtin.command: ps -ef
+  register: ps_result
+  changed_when: false
+
+- name: 2.3.3.6 Audit - Check if Remote Management Is Disabled
+  ansible.builtin.command: grep -c ARDAgent
+  args:
+    stdin: '{{ ps_result.stdout }}'
+  register: remote_management_audit_result
+  failed_when: remote_management_audit_result.rc > 1
+  changed_when: false
+
+- name: 2.3.3.6 Remediation - Disable Remote Management
+  ansible.builtin.command: /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart
+    -deactivate -stop
+  when: remote_management_audit_result.stdout != "0"
+  register: remote_management_remediation_result
+  changed_when: remote_management_remediation_result.rc == 0
+
+# Recommendation 2.3.3.7
+- name: 2.3.3.7 Audit - Check if Remote Apple Events Is Disabled
+  ansible.builtin.command: systemsetup -getremoteappleevents
+  register: remote_apple_events_audit_result
+  changed_when: false
+
+- name: 2.3.3.7 Remediation - Disable Remote Apple Events
+  ansible.builtin.command: systemsetup -setremoteappleevents off
+  when: '"Remote Apple Events: Off" not in remote_apple_events_audit_result.stdout'
+  register: remote_apple_events_remediation_result
+  changed_when: remote_apple_events_remediation_result.rc == 0
+
+# Recommendation 2.3.3.8
+- name: 2.3.3.8 Audit - Check if Internet Sharing Is Disabled
+  ansible.builtin.command: defaults read /Library/Preferences/SystemConfiguration/com.apple.nat NAT
+  register: internet_sharing_audit_result
+  failed_when: internet_sharing_audit_result.rc > 1
+  changed_when: false
+
+- name: 2.3.3.8 Remediation - Disable Internet Sharing
+  ansible.builtin.command: defaults write
+    /Library/Preferences/SystemConfiguration/com.apple.nat NAT -dict Enabled
+    -int 0
+  when: internet_sharing_audit_result.stdout != "{\n    Enabled = 0;\n}"
+  register: internet_sharing_remediation_result
+  changed_when: internet_sharing_remediation_result.rc == 0
+
+# Recommendation 2.4.1
+- name: 2.4.1 Audit - Check if Show Wi-Fi status in Menu Bar Is Enabled
+  ansible.builtin.command: defaults read com.apple.controlcenter WiFi
+  register: wifi_status_audit_result
+  failed_when: wifi_status_audit_result.rc > 1
+  changed_when: false
+
+- name: 2.4.1 Remediation - Enable Show Wi-Fi status in Menu Bar
+  ansible.builtin.command: defaults write com.apple.controlcenter WiFi -int 18
+  when: wifi_status_audit_result.stdout != "18"
+  register: wifi_status_remediation_result
+  changed_when: wifi_status_remediation_result.rc == 0
+
+# Recommendation 2.4.2
+- name: 2.4.2 Audit - Check if Show Bluetooth status in Menu Bar Is Enabled
+  ansible.builtin.command: defaults read com.apple.controlcenter Bluetooth
+  register: bluetooth_status_audit_result
+  failed_when: bluetooth_status_audit_result.rc > 1
+  changed_when: false
+
+- name: 2.4.2 Remediation - Enable Show Bluetooth status in Menu Bar
+  ansible.builtin.command: defaults write com.apple.controlcenter Bluetooth -int 18
+  when: bluetooth_status_audit_result.stdout != "18"
+  register: bluetooth_status_remediation_result
+  changed_when: bluetooth_status_remediation_result.rc == 0
+
+# # Terminal Method Audit
+# - name: 2.6.4 Audit - Check if ad tracking is limited for each user
+#   ansible.builtin.command: /usr/bin/defaults read {{ item }}/Library/Preferences/com.apple.AdLib.plist allowApplePersonalizedAdvertising
+#   with_items:
+#     - /Users/*
+#   register: limit_ad_tracking_user_audit
+#   changed_when: false
+#   failed_when: limit_ad_tracking_user_audit.stdout != "0"
+
+# # Terminal Method Remediation
+# - name: 2.6.4 Remediation - Enable limited ad tracking for non-compliant users
+#   ansible.builtin.command: /usr/bin/defaults write {{ item.item }}/Library/Preferences/com.apple.Adlib.plist allowApplePersonalizedAdvertising -bool false
+#   with_items: "{{ limit_ad_tracking_user_audit.results }}"
+#   when: item.stdout != "0"
+
+# Recommendation 2.6.5
+- name: 2.6.5 Audit - Check if Gatekeeper Is Enabled
+  ansible.builtin.command: spctl --status
+  register: gatekeeper_audit_result
+  changed_when: false
+
+- name: 2.6.5 Remediation - Enable Gatekeeper
+  ansible.builtin.command: spctl --master-enable
+  when: gatekeeper_audit_result.stdout != "assessments enabled"
+  register: gatekeeper_remediation_result
+  changed_when: gatekeeper_remediation_result.rc == 0
+
+- name: 2.6.6 Audit - Check if FileVault Is Enabled
+  ansible.builtin.command: fdesetup status
+  register: filevault_audit_result
+  changed_when: false
+
+# Recommendation 2.12.1
+- name: 2.12.1 Audit - Check if Guest Account Is Disabled
+  ansible.builtin.command: dscl . -read /Users/Guest AuthenticationAuthority
+  register: guest_account_audit_result
+  failed_when: guest_account_audit_result.rc == 0
+  changed_when: false
+
+- name: 2.12.1 Remediation - Disable Guest Account
+  ansible.builtin.command: dscl . -delete /Users/Guest AuthenticationAuthority
+  when: guest_account_audit_result.rc == 0
+  register: guest_account_remediation_result
+  changed_when: guest_account_remediation_result.rc == 0
+
+# - name: 2.10.1 Ensure an Inactivity Interval of 20 Minutes Or Less for the Screen Saver Is Enabled
+#   community.general.osx_defaults:
+#     domain: com.apple.screensaver
+#     key: idleTime
+#     type: int
+#     value: 1200
+#   become: true
+#   become_user: "{{ item }}"
+#   loop: "{{ ansible_play_batch }}"
+
+# - name: 2.10.2 Ensure Require Password After Screen Saver Begins or Display Is Turned Off Is Enabled for 5 Seconds or Immediately
+#   community.general.osx_defaults:
+#     domain: com.apple.screensaver
+#     key: askForPassword
+#     type: int
+#     value: 1
+#   become: true
+#   become_user: "{{ item }}"
+#   loop: "{{ ansible_play_batch }}"
+
+# - name: 2.10.2 Ensure Require Password After Screen Saver Begins or Display Is Turned Off Is Enabled for 5 Seconds or Immediately
+#   community.general.osx_defaults:
+#     domain: com.apple.screensaver
+#     key: askForPasswordDelay
+#     type: float
+#     value: 0
+#   become: true
+#   become_user: "{{ item }}"
+#   loop: "{{ ansible_play_batch }}"
+
+# Recommendation 3.1
+- name: 3.1 Audit - Get list of loaded services
+  ansible.builtin.command: /bin/launchctl list
+  register: launchctl_list_result
+  changed_when: false
+
+- name: 3.1 Audit - Check if security auditing is enabled
+  ansible.builtin.command: /usr/bin/grep -c com.apple.auditd
+  args:
+    stdin: '{{ launchctl_list_result.stdout }}'
+  register: security_auditing_audit_result
+  failed_when: security_auditing_audit_result.rc > 1
+  changed_when: false
+
+- name: 3.1 Remediation - Ensure Security Auditing Is Enabled
+  ansible.builtin.command: /bin/launchctl load -w /System/Library/LaunchDaemons/com.apple.auditd.plist
+  when: security_auditing_audit_result.stdout != "1"
+  register: security_auditing_remediation_result
+  changed_when: security_auditing_remediation_result.rc == 0
+
+# Recommendation 3.3
+- name: 3.3 Audit - Check if install.log Is Retained for 365 or More Days
+  ansible.builtin.command: grep -c '^ttl=\s*365' /etc/asl/com.apple.install
+  register: install_log_ttl_audit_result
+  changed_when: false
+  failed_when: install_log_ttl_audit_result.rc > 1
+
+- name: 3.3 Audit - Check if install.log Has No Maximum Size
+  ansible.builtin.command: grep -c '^all_max' /etc/asl/com.apple.install
+  register: install_log_size_audit_result
+  changed_when: false
+  failed_when: install_log_size_audit_result.rc > 1
+
+- name: 3.3 Remediation - Ensure install.log Is Retained for 365 or More Days
+  ansible.builtin.lineinfile:
+    path: /etc/asl/com.apple.install
+    regexp: ^ttl
+    line: ttl=365
+  register: install_log_ttl_remediation_result
+  when: install_log_ttl_audit_result.stdout != "1"
+
+- name: 3.3 Remediation - Ensure install.log Has No Maximum Size
+  ansible.builtin.lineinfile:
+    path: /etc/asl/com.apple.install
+    regexp: ^all_max
+    state: absent
+  register: install_log_size_remediation_result
+  when: install_log_size_audit_result.stdout != "0"
+
+# Recommendation 3.5
+- name: 3.5 Ensure Access to Audit Records Is Controlled
+  ansible.builtin.file:
+    path: '{{ item }}'
+    owner: root
+    group: wheel
+    mode: '0440'
+  loop:
+    - /etc/security/audit_control
+    - /var/audit
+
+# Recommendation 3.4
+- name: 3.4 Audit - Check if Security Auditing Retention Is Enabled
+  ansible.builtin.command: /usr/bin/grep -E "^expire-after" /etc/security/audit_control
+  register: security_auditing_retention_audit_result
+  failed_when: security_auditing_retention_audit_result.rc > 1
+  changed_when: false
+
+- name: 3.4 Remediation - Ensure Security Auditing Retention Is Enabled
+  ansible.builtin.lineinfile:
+    path: /etc/security/audit_control
+    regexp: ^expire-after
+    line: expire-after:60d OR 5G
+  register: security_auditing_retention_remediation_result
+  when: security_auditing_retention_audit_result.stdout is not
+    search('expire-after:60d OR 5G')
+
+# Recommendation 3.6
+- name: 3.6 Audit - Check if firewall logging is enabled
+  ansible.builtin.command: /usr/bin/osascript -l JavaScript -e "function run() {
+    let pref1 =
+    $.NSUserDefaults.alloc.initWithSuiteName('com.apple.security.firewall').objectForKey('EnableLogging').js;
+    let pref2 =
+    $.NSUserDefaults.alloc.initWithSuiteName('com.apple.security.firewall').objectForKey('LoggingOption').js;
+    let pref3 =
+    $.NSUserDefaults.alloc.initWithSuiteName('com.apple.alf').objectForKey('loggingenabled').js;
+    let pref4 =
+    $.NSUserDefaults.alloc.initWithSuiteName('com.apple.alf').objectForKey('loggingoption').js;
+    if ( ( pref1 == true && pref2 == 'detail' ) || ( pref3 == 1 && pref4 == 2 )
+    ) { return('true'); } else { return('false'); } }"
+  register: firewall_logging_audit
+  changed_when: false
+
+- name: 3.6 Remediation - Enable firewall logging
+  ansible.builtin.command: /usr/libexec/ApplicationFirewall/socketfilterfw --setloggingmode on
+  when: firewall_logging_audit.stdout != "true"
+  register: firewall_logging_enabled_remediation
+  changed_when: firewall_logging_enabled_remediation.rc == 0
+
+- name: 3.6 Remediation - Set firewall logging to detail mode
+  ansible.builtin.command: /usr/libexec/ApplicationFirewall/socketfilterfw --setloggingopt detail
+  when: firewall_logging_audit.stdout != "true"
+  register: firewall_logging_detail_remediation
+  changed_when: firewall_logging_detail_remediation.rc == 0
+
+- name: 3.6 Remediation - Display firewall logging status after remediation
+  ansible.builtin.debug:
+    msg: Firewall logging has been enabled and set to detail mode
+  when: firewall_logging_enabled_remediation.changed or
+    firewall_logging_detail_remediation.changed
+
+# 4.1 Ensure Bonjour Advertising Services Is Disabled
+- name: 4.1 Remediation
+  community.general.osx_defaults:
+    domain: /Library/Preferences/com.apple.mDNSResponder
+    key: NoMulticastAdvertisements
+    type: bool
+    value: true
+
+# 4.2 Ensure HTTP Server Is Disabled
+- name: 4.2 Audit - Get list of loaded services
+  ansible.builtin.command: /bin/launchctl list
+  register: launchctl_list_result_4_2
+  changed_when: false
+
+- name: 4.2 Audit - Check if HTTP Server Is Disabled
+  ansible.builtin.command: /usr/bin/grep -c "org.apache.httpd"
+  args:
+    stdin: '{{ launchctl_list_result_4_2.stdout }}'
+  register: httpd_audit
+  failed_when: httpd_audit.rc > 1
+  changed_when: false
+
+- name: 4.2 Remediation
+  when: httpd_audit.stdout != "0"
+  block:
+    - name: Disable httpd
+      ansible.builtin.command: /usr/sbin/apachectl stop
+      register: disable_httpd_result
+      changed_when: disable_httpd_result.rc == 0
+    - name: Unload httpd
+      ansible.builtin.command: /bin/launchctl unload -w
+        /System/Library/LaunchDaemons/org.apache.httpd.plist
+      register: unload_httpd_result
+      changed_when: unload_httpd_result.rc == 0
+
+# 4.3 Ensure NFS Server Is Disabled
+- name: 4.3 Audit - Get list of loaded services
+  ansible.builtin.command: /bin/launchctl list
+  register: launchctl_list_result_4_3
+  changed_when: false
+
+- name: 4.3 Audit - Check if NFS Server Is Disabled
+  ansible.builtin.command: /usr/bin/grep -c com.apple.nfsd
+  args:
+    stdin: '{{ launchctl_list_result_4_3.stdout }}'
+  register: nfsd_audit
+  failed_when: nfsd_audit.rc > 1
+  changed_when: false
+
+- name: 4.3 Audit - Check /etc/exports
+  ansible.builtin.stat:
+    path: /etc/exports
+  register: exports_audit
+
+- name: 4.3 Remediation
+  when: nfsd_audit.stdout != "0" or exports_audit.stat.exists
+  block:
+    - name: Stop nfsd
+      ansible.builtin.command: /sbin/nfsd stop
+      register: stop_nfsd_result
+      changed_when: stop_nfsd_result.rc == 0
+    - name: Disable nfsd
+      ansible.builtin.command: /bin/launchctl disable system/com.apple.nfsd
+      register: disable_nfsd_result
+      changed_when: disable_nfsd_result.rc == 0
+    - name: Remove /etc/exports
+      ansible.builtin.file:
+        path: /etc/exports
+        state: absent
+
+# 5.1.1 Ensure Home Folders Are Secure
+- name: 5.1.1 Audit - Find home folders
+  ansible.builtin.command: /usr/bin/sudo /usr/bin/find /System/Volumes/Data/Users
+    -mindepth 1 -maxdepth 1 -type d -not -perm 700 # | /usr/bin/grep -v "Shared" | /usr/bin/grep -v "Guest"
+  register: home_audit_find
+  changed_when: false
+
+# - name: 5.1.1 Debug home_audit_find
+#   ansible.builtin.debug:
+#     msg: "{{ home_audit_find }}"
+
+- name: 5.1.1 Audit - Exclude Shared folder
+  ansible.builtin.command: /usr/bin/grep -v "Shared"
+  args:
+    stdin: '{{ home_audit_find.stdout }}'
+  register: home_audit_shared
+  changed_when: false
+  failed_when: home_audit_shared.rc > 1
+
+- name: 5.1.1 Audit - Exclude Guest folder
+  ansible.builtin.command: /usr/bin/grep -v "Guest"
+  args:
+    stdin: '{{ home_audit_shared.stdout }}'
+  register: home_audit
+  changed_when: false
+  failed_when: home_audit.rc > 1
+  when: home_audit_shared.stdout != ""
+
+# - name: 5.1.1 Debug home_audit_shared
+#   ansible.builtin.debug:
+#     msg: "{{ home_audit_shared }}"
+
+- name: 5.1.1 Debug home_audit
+  ansible.builtin.debug:
+    msg: '{{ home_audit }}'
+
+- name: 5.1.1 Remediation
+  ansible.builtin.file:
+    path: '{{ item }}'
+    mode: og-rwx
+    recurse: true
+  loop: '{{ home_audit.stdout_lines }}'
+  when: home_audit.stdout_lines is defined
+
+# 5.1.2 Ensure System Integrity Protection Status (CSRUTIL) Is Enabled
+- name: 5.1.2 Audit
+  ansible.builtin.command: /usr/bin/csrutil status
+  register: sip_audit
+  changed_when: false
+  failed_when: '''System Integrity Protection status: enabled.'' not in sip_audit.stdout'
+
+- name: 5.1.2 Remediation
+  ansible.builtin.fail:
+    msg: SIP is disabled. You must boot to Recovery OS to re-enable it.
+  when: '''System Integrity Protection status: enabled.'' not in sip_audit.stdout'
+
+# 5.1.3 Ensure Apple Mobile File Integrity (AMFI) Is Enabled
+- name: 5.1.3 Audit
+  ansible.builtin.command: /usr/sbin/nvram -p
+  register: nvram_result
+  changed_when: false
+
+- name: 5.1.3 Audit - Check if AMFI Is Enabled
+  ansible.builtin.command: /usr/bin/grep -c "amfi_get_out_of_my_way=1"
+  args:
+    stdin: '{{ nvram_result.stdout }}'
+  register: amfi_audit
+  failed_when: amfi_audit.rc > 1
+  changed_when: false
+
+- name: 5.1.3 Remediation
+  ansible.builtin.command: /usr/sbin/nvram boot-args=""
+  register: amfi_remediation
+  changed_when: '"set boot-args" in amfi_remediation.stdout'
+  when: amfi_audit.stdout != "0"
+
+# 5.1.4 Ensure Sealed System Volume (SSV) Is Enabled
+- name: 5.1.4 Audit
+  ansible.builtin.command: /usr/bin/csrutil authenticated-root status
+  register: ssv_audit
+  changed_when: false
+  failed_when: '''Authenticated Root status: enabled'' not in ssv_audit.stdout'
+
+- name: 5.1.4 Remediation
+  ansible.builtin.fail:
+    msg: If SSV has been disabled, assume the OS has been compromised. Erase and
+      clean install.
+  when: '''Authenticated Root status: enabled'' not in ssv_audit.stdout'
+
+# 5.1.5 Ensure Appropriate Permissions Are Enabled for System Wide Applications
+- name: 5.1.5 Audit
+  ansible.builtin.command: /usr/bin/find /System/Volumes/Data/Applications -iname
+    "*\.app" -type d -perm -2 -ls
+  register: app_permissions_audit_find
+  changed_when: false
+
+- name: 5.1.5 Audit - Exclude Xcode
+  ansible.builtin.command: /usr/bin/grep -v "Xcode.app"
+  args:
+    stdin: '{{ app_permissions_audit_find.stdout }}'
+  register: app_permissions_audit
+  changed_when: false
+  when: app_permissions_audit_find.stdout != ""
+
+- name: 5.1.5 Remediation
+  ansible.builtin.file:
+    path: '{{ item.split()[0] }}'
+    mode: o-w
+    recurse: 'yes'
+  loop: '{{ app_permissions_audit.stdout_lines }}'
+  when: app_permissions_audit_find.stdout != ""
+
+# 5.1.6 Ensure No World Writable Folders Exist in the System Folder
+# TODO - This is not doable, currently, by Ansible
+
+# 5.2.* Are setup for profile. TODO
+
+# 5.4 Ensure the Sudo Timeout Period Is Set to Zero
+- name: 5.4 Remediation - Set sudo timeout period
+  ansible.builtin.lineinfile:
+    path: /etc/sudoers.d/10_cissudoconfiguration
+    line: Defaults timestamp_timeout=0
+    create: 'yes'
+    mode: '0440'
+    owner: root
+    group: wheel
+
+# 5.5 Ensure a Separate Timestamp Is Enabled for Each User/tty Combo
+- name: 5.5 Remediation - Set sudo timestamp type
+  ansible.builtin.lineinfile:
+    path: /etc/sudoers.d/10_cissudoconfiguration
+    line: Defaults timestamp_type=tty
+    create: 'yes'
+    mode: '0440'
+    owner: root
+    group: wheel
+
+# 5.6 Ensure the "root" Account Is Disabled
+- name: 5.6 Audit
+  ansible.builtin.command: /usr/bin/dscl . -read /Users/root AuthenticationAuthority
+  register: root_audit
+  failed_when: root_audit.rc != 0
+  changed_when: false
+
+- name: 5.6 Remediation
+  ansible.builtin.command: /usr/sbin/dsenableroot -d
+  when: root_audit.rc != 0
+  register: root_remediation
+  changed_when: root_remediation.rc == 0
+
+# 5.7 Ensure an Administrator Account Cannot Login to Another User's Active and Locked Session
+- name: 5.7 Audit
+  ansible.builtin.command: /usr/bin/security authorizationdb read system.login.screensaver 2>&1
+  register: screensaver_audit
+  changed_when: false
+
+- name: 5.7 Audit - Check screensaver login settings
+  ansible.builtin.command: /usr/bin/grep -c 'use-login-window-ui'
+  args:
+    stdin: '{{ screensaver_audit.stdout }}'
+  register: screensaver_audit_grep
+  failed_when: screensaver_audit_grep.rc > 1
+  changed_when: false
+
+- name: 5.7 Remediation
+  ansible.builtin.command: /usr/bin/security authorizationdb write system.login.screensaver use-login-window-ui
+  when: screensaver_audit_grep.stdout == "0"
+  register: screensaver_remediation
+  changed_when: screensaver_remediation.rc == 0
+
+# 5.8 Ensure a Login Window Banner Exists
+- name: 5.8 Audit
+  ansible.builtin.find:
+    paths: /Library/Security
+    patterns: PolicyBanner.*
+  register: policy_banner_audit
+
+- name: 5.8 Audit - Check PolicyBanner permissions
+  ansible.builtin.stat:
+    path: '{{ item.path }}'
+  loop: '{{ policy_banner_audit.files }}'
+  register: policy_banner_stat
+
+- name: 5.8 Remediation - Set PolicyBanner permissions
+  ansible.builtin.file:
+    path: '{{ item.stat.path }}'
+    mode: 420
+  loop: '{{ policy_banner_stat.results }}'
+  when: item.stat.mode != 0o644
+
+# 5.9 Ensure the Guest Home Folder Does Not Exist
+- name: 5.9 Audit - Check if Guest user home folder exists
+  ansible.builtin.command: /usr/bin/sudo /bin/ls /Users/ | /usr/bin/grep Guest
+  register: guest_home_audit
+  changed_when: false
+  failed_when: guest_home_audit.rc == 0
+
+- name: 5.9 Remediation - Remove Guest user home folder
+  ansible.builtin.file:
+    path: /Users/Guest
+    state: absent
+  when: guest_home_audit.rc == 0
+
+# 5.10 Ensure XProtect Is Running and Updated
+- name: 5.10 Audit - Get list of running services
+  ansible.builtin.command: /bin/launchctl list
+  register: launchctl_list_result
+  changed_when: false
+
+- name: 5.10 Audit - Check if XProtect is running
+  ansible.builtin.command: /usr/bin/grep -cE '(com.apple.XprotectFramework.PluginService$|com.apple.XProtect.daemon.scan$)'
+  args:
+    stdin: '{{ launchctl_list_result.stdout }}'
+  register: xprotect_running_audit
+  changed_when: false
+  failed_when: xprotect_running_audit.stdout != "2"
+
+- name: 5.10 Audit - Get install history data
+  ansible.builtin.command: /usr/sbin/system_profiler SPInstallHistoryDataType
+  register: install_history_result
+  changed_when: false
+
+- name: 5.10 Audit - Check XProtect updates
+  ansible.builtin.command: /usr/bin/grep -A 5 'XProtectPlistConfigData'
+  args:
+    stdin: '{{ install_history_result.stdout }}'
+  register: xprotect_updates_audit
+  changed_when: false
+
+- name: 5.10 Remediation - Enable and update XProtect
+  when: xprotect_running_audit.stdout != "2"
+  block:
+    - name: 5.10 Remediation - Load XProtect daemon
+      ansible.builtin.command: /bin/launchctl load -w /Library/Apple/System/Library/LaunchDaemons/com.apple.XProtect.daemon.scan.plist
+      register: xprotect_daemon_load
+      changed_when: xprotect_daemon_load.rc == 0
+
+    - name: 5.10 Remediation - Load XProtectFramework plugin
+      ansible.builtin.command: /bin/launchctl load -w /Library/Apple/System/Library/LaunchDaemons/com.apple.XprotectFramework.PluginService.plist
+      register: xprotect_plugin_load
+      changed_when: xprotect_plugin_load.rc == 0
+
+    - name: 5.10 Remediation - Trigger background check with forced scan
+      ansible.builtin.command: /usr/sbin/softwareupdate -l --background-critical
+      register: xprotect_update
+      changed_when: xprotect_update.rc == 0
+
+# 6.1.1 Ensure Show All Filename Extensions Setting is Enabled
+- name: 6.1.1 Audit - Check if file extensions are displayed
+  ansible.builtin.command: defaults read NSGlobalDomain AppleShowAllExtensions
+  register: filename_extensions_audit
+  failed_when: filename_extensions_audit.rc != 0 and 'does not exist' not in filename_extensions_audit.stderr
+  changed_when: false
+
+- name: 6.1.1 Remediation - Enable displaying file extensions
+  community.general.osx_defaults:
+    domain: NSGlobalDomain
+    key: AppleShowAllExtensions
+    type: bool
+    value: true
+    state: present
+  when: filename_extensions_audit.stdout != "1" and filename_extensions_audit.rc == 0
+  notify: Restart Finder
+
+  # handlers:
+  #   - name: Restart Finder
+  #     ansible.builtin.command: /usr/bin/killall Finder
+
+# 6.3.1 Ensure Automatic Opening of Safe Files in Safari Is Disabled
+# Profiles TODO
+
+# 6.3.3 Ensure Warn When Visiting A Fraudulent Website in Safari Is Enabled
+# Profiles TODO
+
+# 6.3.4 Ensure Prevent Cross-site Tracking in Safari Is Enabled
+# Profiles TODO
+
+# 6.3.6 Ensure Advertising Privacy Protection in Safari Is Enabled
+# Profiles TODO
+
+# 6.3.7 Ensure Show Full Website Address in Safari Is Enabled
+# Profiles TODO
+
+# 6.3.9 Ensure Pop-up Windows Are Blocked
+# Profiles TODO
+
+# 6.4.1 Ensure Secure Keyboard Entry Terminal.app Is Enabled
+# Profiles TODO

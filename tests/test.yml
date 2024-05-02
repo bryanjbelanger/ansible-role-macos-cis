@@ -1,0 +1,5 @@
+---
+- hosts: macos-test
+  remote_user: root
+  roles:
+    - cis_macos
